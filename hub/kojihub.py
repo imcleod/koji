@@ -2911,7 +2911,7 @@ def import_rpm(fn,buildinfo=None,brootid=None):
                 #      and we still need to create a new build
                 raise koji.GenericError, 'No matching build'
             state = koji.BUILD_STATES[buildinfo['state']]
-            if state in ('FAILED', 'CANCELED', 'DELETED'):
+            if state in ('FAILED', 'DELETED'):
                 nvr = "%(name)s-%(version)s-%(release)s" % buildinfo
                 raise koji.GenericError, "Build is %s: %s" % (state, nvr)
     else:
