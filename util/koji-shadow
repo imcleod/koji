@@ -127,6 +127,8 @@ def get_options():
                       help=_("greylist rules"))
     parser.add_option("--rules-blacklist", 
                       help=_("blacklist rules"))
+    parser.add_option("--rules-ignorelist",
+                      help=_("list of packages to ignore"))
     parser.add_option("--tag-build", action="store_true", default=False,
                       help=_("tag sucessful builds into the tag we are building, default is to not tag"))
     parser.add_option("--arches",
@@ -540,6 +542,7 @@ class BuildTracker(object):
         self.blacklist = None
         self.whitelist = None
         self.greylist = None
+        self.ignorelist = None
         self.substitute_idx = {}
         self.substitutions = {}
         if options.config.has_option('rules', 'whitelist'):
@@ -548,6 +551,9 @@ class BuildTracker(object):
             self.blacklist = options.config.get('rules', 'blacklist').split()
         if options.config.has_option('rules', 'greylist'):
             self.greylist = options.config.get('rules', 'greylist').split()
+        if options.config.has_option('rules', 'ignorelist'):
+            self.ignorelist = options.config.get('rules', 'ignorelist').split()
+            print self.ignorelist
         if options.config.has_option('rules', 'substitutions'):
             #At present this is a simple multi-line format
             #one substitution per line
@@ -665,6 +671,13 @@ class BuildTracker(object):
                 child_id = from_build.id
             build = TrackedBuild(build_id, child=child_id, tracker=self)
             self.builds[build_id] = build
+        if self.ignorelist:
+           for pattern in self.ignorelist:
+                if fnmatch.fnmatch(build.name, pattern): 
+                    #we have set this build to be ignored 
+                    #likely because the package doesnt build on the arch in question
+                    #TODO: make this dynamic
+                    return build
         if from_build:
             tail = " (from %s)" % from_build.nvr
         else:
@@ -744,6 +757,9 @@ class BuildTracker(object):
                     build.setState('brokendeps')
                     print "%sCan't rebuild %s, %s is %s" % (head, build.nvr, dep.nvr, dep.state)
                     newdeps = None
+                    break
+                elif dep.name in self.ignorelist:
+                    print "%sIgnoring build %s" % (head, dep.nvr)
                     break
                 else:
                     newdeps.append(dep)
