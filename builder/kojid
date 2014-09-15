@@ -2733,7 +2733,7 @@ class BaseImageTask(OzImageTask):
         we have to do this. rhevm-ova requires rhevm, but if the user did not
         request it, we should not pass it back up.
         """
-        supported = ('raw', 'vmdk', 'qcow', 'qcow2', 'vdi', 'rhevm-ova', 'vsphere-ova', 'docker')
+        supported = ('raw', 'raw-xz', 'vmdk', 'qcow', 'qcow2', 'vdi', 'rhevm-ova', 'vsphere-ova', 'docker')
         for f in formats:
             if f not in supported:
                 raise koji.ApplianceError('Invalid format: %s' % f)
@@ -2821,7 +2821,8 @@ class BaseImageTask(OzImageTask):
 
         # target-image type images
         if 'docker' in self.formats:
-            targ = do_target_image(base.base_image.identifier, 'docker')
+            targ = do_target_image(base.base_image.identifier, 'docker',
+                ova_opts={'compress': 'gzip'})
             images['docker'] = {'image': targ.target_image.data}
 
         ova_opts = {}
@@ -2856,6 +2857,27 @@ class BaseImageTask(OzImageTask):
                 cmd.insert(2, '-c') # enable compression for qcow images
             conlog = os.path.join(self.workdir,
                 'qemu-img-%s-%s.log' % (format, arch))
+            log_output(self.session, cmd[0], cmd, conlog,
+                self.getUploadDir(), logerror=1)
+            lxml = self.fixImageXML(format, imgname,
+                'libvirt-%s-%s.xml' % (format, arch),
+                base.base_image.parameters['libvirt_xml'])
+            images[format] = {'image': newimg, 'libvirt': lxml}
+
+        # xz compress the raw disk image if asked for
+        for format in ('raw-xz',):
+            if format not in self.formats:
+                continue
+            newimg = os.path.join(self.workdir, imgname + 'raw.xz')
+            rawimg = os.path.join(self.workdir, imgname + 'raw')
+            cmd = ['/bin/cp', base.base_image.data, rawimg]
+            conlog = os.path.join(self.workdir,
+                'xz-cp-%s-%s.log' % (format, arch))
+            log_output(self.session, cmd[0], cmd, conlog,
+                self.getUploadDir(), logerror=1)
+            cmd = ['/usr/bin/xz', '-z', rawimg]
+            conlog = os.path.join(self.workdir,
+                'xz-%s-%s.log' % (format, arch))
             log_output(self.session, cmd[0], cmd, conlog,
                 self.getUploadDir(), logerror=1)
             lxml = self.fixImageXML(format, imgname,
@@ -2948,6 +2970,8 @@ class BaseImageTask(OzImageTask):
                 newname = imgname + '.' + format.replace('-', '.')
             elif format == 'docker':
                 newname = imgname + '.' + 'tar.gz'
+            elif format == 'raw-xz':
+                newname = imgname + '.' + 'raw.xz'
             else:
                 newname = imgname + '.' + format
             if format != 'docker':
@@ -3651,7 +3675,7 @@ def get_options():
                 'log_level': None,
                 'topdir': '/mnt/koji',
                 'topurl': None,
-                'workdir': '/tmp/koji',
+                'workdir': '/var/tmp/koji',
                 'pluginpath': '/usr/lib/koji-builder-plugins',
                 'mockdir': '/var/lib/mock',
                 'mockuser': 'kojibuilder',
