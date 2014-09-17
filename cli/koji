@@ -4981,6 +4981,92 @@ def handle_spin_appliance(options, session, args):
         assert False
     _build_image(options, task_options, session, args, 'appliance')
 
+def handle_image_build_indirection(options, session, args):
+    """Create a disk image using other disk images via the Indirection plugin"""
+    usage = _("usage: %prog image-build-indirection [base_image] " +
+              "[utility_image] [indirection_build_template]")
+    usage += _("\n       %prog image-build --config FILE")
+    usage += _("\n\n(Specify the --help global option for a list of other " +
+               "help options)")
+    parser = OptionParser(usage=usage)    
+    parser.add_option("--config",
+        help=_("Use a configuration file to define image-build options " +
+               "instead of command line options (they will be ignored)."))
+    parser.add_option("--background", action="store_true",
+        help=_("Run the image creation task at a lower priority"))
+    parser.add_option("--base-image",
+        help=_("Reference to the base image to be used"))
+    parser.add_option("--utility-image",
+        help=_("Reference to the utility image to be used"))
+    parser.add_option("--indirection-template",
+        help=_("File containing the template used to drive the indirection plugin"))
+    parser.add_option("--indirection-template-url",
+        help=_("URL containing the template used to drive the indirection plugin"))
+    parser.add_option("--scratch", action="store_true",
+        help=_("Create a scratch image"))
+    parser.add_option("--wait", action="store_true",
+        help=_("Wait on the image creation, even if running in the background"))
+    parser.add_option("--noprogress", action="store_true",
+        help=_("Do not display progress of the upload"))
+
+
+    (task_options, args) = parser.parse_args(args)
+    _build_image_indirection(options, task_options, session, args)
+
+
+def _build_image_indirection(options, task_opts, session, args):
+    """
+    A private helper function for builds using the indirection plugin of ImageFactory
+    """
+    activate_session(session)
+
+    # Set the task's priority. Users can only lower it with --background.
+    priority = None
+    if task_opts.background:
+        # relative to koji.PRIO_DEFAULT; higher means a "lower" priority.
+        priority = 5
+    if _running_in_bg() or task_opts.noprogress:
+        callback = None
+    else:
+        callback = _progress_callback
+
+    # ****** TODO: Validate that the base and utility images actually exist
+
+    # Upload the indirection template file to the staging area.
+    # If it's a URL, it's kojid's job to go get it when it does the checkout.
+    if not task_opts.indirection_template_url:
+        if not task_opts.scratch:
+            # only scratch builds can omit ksurl
+            raise koji.GenericError, _("Non-scratch builds must provide a URL for the indirection template")
+        templatefile = task_opts.indirection_template
+        serverdir = _unique_path('cli-image-indirection')
+        session.uploadWrapper(templatefile, serverdir, callback=callback)
+        task_opts.indirection_template = os.path.join('work', serverdir,
+            os.path.basename(templatefile))
+        print
+
+    hub_opts = { }
+    for opt in ('indirection_template', 'indirection_template_url', 'scratch' ):
+        val = getattr(task_opts, opt, None)
+        if val is not None:
+            hub_opts[opt] = val
+
+    # finally, create the task.
+    task_id = session.buildImageIndirection(task_opts.base_image, task_opts.utility_image,
+                                 opts=hub_opts, priority=priority)
+
+    if not options.quiet:
+        print "Created task:", task_id
+        print "Task info: %s/taskinfo?taskID=%s" % (options.weburl, task_id)
+    #if task_opts.wait or (task_opts.wait is None and not _running_in_bg()):
+    #    session.logout()
+    #    return watch_tasks(session, [task_id], quiet=options.quiet)
+    #else:
+    #    return
+
+
+
+
 def handle_image_build(options, session, args):
     """Create a disk image given an install tree"""
     formats = ('vmdk', 'qcow', 'qcow2', 'vdi', 'rhevm-ova', 'vsphere-ova',
@@ -6139,7 +6225,7 @@ def handle_help(options, session, args):
     list_commands(show_admin=options.admin)
 
 
-def list_commands(show_admin=False):
+def list_commands(show_admin=True):
     handlers = []
     for name,value in globals().items():
         if name.startswith('handle_'):

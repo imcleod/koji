@@ -1807,6 +1807,7 @@ class BuildImageTask(MultiPlatformTask):
         """return the next available release number for an N-V"""
         return self.session.getNextRelease(dict(name=name, version=ver))
 
+  
 class BuildBaseImageTask(BuildImageTask):
     Methods = ['image']
 
@@ -2983,6 +2984,25 @@ class BaseImageTask(OzImageTask):
 
         # no need to delete anything since self.workdir will get scrubbed
         return imgdata
+
+class BuildIndirectionImageTask(OzImageTask):
+    Methods = ['indirectionimage']
+
+    def handler(self, base_image, utility_image, opts=None):
+        """Governing task for building an image with two other images using Factory Indirection"""
+        # Don't really have a target, tag or repo to worry about
+
+        # TODO: Add mode of operation where full build details are given for
+        #       either base or utility or both, then spawn subtasks to do them first
+
+        # Retrieve Base and Utility images and create BaseImage objects in our Factory store
+
+        # Create the Indirection target image build object and run it
+
+        # Collect artifacts on success and upload them back to the hub
+
+        self.logger.debug("Doing an indirection build with all the required bits")
+        return "Indirection build went off without a hitch.  Nicely done!"
 
 class BuildSRPMFromSCMTask(BaseBuildTask):
 
