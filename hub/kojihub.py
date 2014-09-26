@@ -7111,7 +7111,7 @@ class RootExports(object):
 
     # Create the image task. Called from _build_image_oz in the client.
     #
-    def buildImageIndirection(self, base_image, utility_image, opts=None, priority=None):
+    def buildImageIndirection(self, opts=None, priority=None):
         """
         Create an image using two other images and an indirection template
         """
@@ -7127,7 +7127,7 @@ class RootExports(object):
         if not opts.has_key('scratch') and not opts.has_key('indirection_template_url'):
             raise koji.ActionNotAllowed, 'Non-scratch builds must provide url for the indirection template'
 
-        return make_task('indirectionimage', [base_image, utility_image, opts], **taskOpts)
+        return make_task('indirectionimage', [ opts ], **taskOpts)
 
     # Create the image task. Called from _build_image_oz in the client.
     #

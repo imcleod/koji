@@ -78,6 +78,8 @@ try:
     plugin_mgr = PluginManager('/etc/imagefactory/plugins.d')
     plugin_mgr.load()
     from imgfac.ApplicationConfiguration import ApplicationConfiguration
+    from imgfac.PersistentImageManager import PersistentImageManager
+    from imgfac.BaseImage import BaseImage
     ozif_enabled = True
 except ImportError:
     pass
@@ -2988,10 +2990,210 @@ class BaseImageTask(OzImageTask):
 class BuildIndirectionImageTask(OzImageTask):
     Methods = ['indirectionimage']
 
-    def handler(self, base_image, utility_image, opts=None):
+    def fetchHubOrSCM(self, filepath, fileurl):
+        """
+        Retrieve a file either from the hub or a remote scm
+        
+        If fileurl is None we assume we are being asked to retrieve from
+        the hub and that filepath is relative to /mnt/koji/work.
+        if fileurl contains a value we assume a remote SCM.
+
+        If retrieving remote we assume that filepath is the file name and
+        fileurl is the path in the remote SCM where that file can be found.
+
+        @returns: absolute path to the retrieved file
+        """
+        self.logger.debug("filepath = %s" % filepath)
+        if fileurl:
+            scm = SCM(fileurl)
+            scm.assert_allowed(self.options.allowed_scms)
+            logfile = os.path.join(self.workdir, 'checkout.log')
+            scmsrcdir = scm.checkout(self.workdir, self.session,
+                self.getUploadDir(), logfile)
+            final_path = os.path.join(scmsrcdir, os.path.basename(filepath))
+        else:
+            tops = dict([(k, getattr(self.options, k)) for k in 'topurl','topdir'])
+            remote_fileobj = koji.openRemoteFile(filepath, **tops)
+            final_path = os.path.join(self.workdir, os.path.basename(filepath))
+            final_fileobj = open(final_path, 'w')
+            final_fileobj.write(remote_fileobj.read())
+            final_fileobj.close()
+        self.logger.debug('uploading retrieved file from here: %s' % final_path)
+        self.uploadFile(final_path) # upload the original ks file
+        return final_path # absolute path to the ks file
+
+    def handler(self, opts=None):
         """Governing task for building an image with two other images using Factory Indirection"""
         # Don't really have a target, tag or repo to worry about
+        # OK - Actually we do - end result wants to be tagged into a target - work on that
 
+        if opts == None:
+            opts = {}
+        self.opts = opts
+
+        results = str(opts)
+        return results
+
+        # Temporary hardcodes
+        # TODO: NOW! - Modify the cli and hub methods to produce these
+        opts['arch'] = 'x86_64'
+
+        indirection_template = self.fetchHubOrSCM(opts.get('indirection_template'),
+                                                  opts.get('indirection_template_url'))
+
+        # TODO: The next several lines are shared with the handler for other Factory tasks
+        #       refactor in such a way that this can be a helper in OzImageTask
+        # BEGIN shared code
+        config = self.makeConfig()
+        self.logger.debug('IF config object: %s' % config)
+        ApplicationConfiguration(configuration=config)
+
+        # ImageFactory picks a port to the guest VM using a rolling integer.
+        # This is a problem for concurrency, so we override the port it picks
+        # here using the task ID. (not a perfect solution but good enough:
+        # the likelihood of image tasks clashing here is very small)
+        rm = ReservationManager()
+        rm._listen_port = rm.MIN_PORT + self.id % (rm.MAX_PORT - rm.MIN_PORT)
+        ozlogname = 'oz-indirection.log'
+        ozlog = os.path.join(self.workdir, ozlogname)
+        # END shared code
+
+        def _task_to_image(task_id):
+            """ Take a task ID and turn it into an Image Factory Base Image object """
+            pim = PersistentImageManager.default_manager()
+	    taskinfo = self.session.getTaskInfo(task_id)
+            taskstate = koji.TASK_STATES[taskinfo['state']].lower()
+            if taskstate != 'closed':
+                raise koji.BuildError("Input task (%d) must be in closed state - current state is (%s)" %
+                                      (task_id, taskstate))
+            taskmethod = taskinfo['method']
+            if taskmethod != "createImage":
+                raise koji.BuildError("Input task method must be 'createImage' - actual method (%s)" %
+                                      (taskmethod))
+	    result = self.session.getTaskResult(task_id)
+	    files = self.session.listTaskOutput(task_id)
+
+            # This approach works for both scratch and saved/formal images
+            # The downside is that we depend on the output file naming convention
+	    def _match_name(inlist, namere):
+		for filename in inlist:
+		    if re.search(namere, filename):
+			return filename
+	    task_diskimage = _match_name(result['files'], ".*qcow2$")
+	    task_tdl = _match_name(result['files'], "tdl.*xml")
+
+	    task_dir = os.path.join(koji.pathinfo.work(),koji.pathinfo.taskrelpath(task_id))
+	    diskimage_full = os.path.join(task_dir, task_diskimage)
+	    tdl_full = os.path.join(task_dir, task_tdl)
+
+            if not (os.path.isfile(diskimage_full) and os.path.isfile(tdl_full)):
+                raise koji.BuildError("Missing TDL or qcow2 image for task (%d) - possible expired scratch build" % (task_id))
+
+            # The sequence to recreate a valid persistent image is as follows
+            # Create a new BaseImage object
+            factory_base_image = BaseImage()
+            # Add it to the persistence layer
+            pim.add_image(factory_base_image)
+            # Now replace the data and template with the files referenced above
+            # and mark it as a complete image
+            # Factory doesn't attempt to modify a disk image after it is COMPLETE so
+            # this will work safely on read-only NFS mounts
+            factory_base_image.data = diskimage_full
+            factory_base_image.template = open(tdl_full).read()
+            factory_base_image.status = 'COMPLETE'
+            # Now save it
+            pim.save_image(factory_base_image)
+            
+            # We can now reference this object directly or via its UUID in persistent storage
+            return factory_base_image
+
+        def _nvr_to_image(nvr, arch):
+            pim = PersistentImageManager.default_manager()
+            build = self.session.getBuild(nvr)
+            if not build:
+                raise koji.BuildError("Could not find build for (%s)" % (nvr))
+            
+            buildarchives = self.session.listArchives(build['id'])
+            if not buildarchives:
+                raise koji.Builderror("Could not retrieve archives for build (%s) from NVR (%s)" % 
+                                      (build['id'], nvr))
+
+            buildfiles = [ x['filename'] for x in buildarchives ]
+            builddir = koji.pathinfo.imagebuild(build)
+
+            def _match_name(inlist, namere):
+                for filename in inlist:
+                    if re.search(namere, filename):
+                        return filename
+
+            build_diskimage = _match_name(buildfiles, ".*%s\.qcow2$" % (arch))
+            build_tdl = _match_name(buildfiles, "tdl.%s\.xml" % (arch))
+
+            diskimage_full = os.path.join(builddir, build_diskimage)
+            tdl_full = os.path.join(builddir, build_tdl)
+
+            if not (os.path.isfile(diskimage_full) and os.path.isfile(tdl_full)):
+                raise koji.BuildError("Missing TDL (%s) or qcow2 (%s) image for image (%s) - this should never happen" % 
+                                      (build_tdl, build_diskimage, nvr))
+
+            # The sequence to recreate a valid persistent image is as follows
+            # Create a new BaseImage object
+            factory_base_image = BaseImage()
+            # Add it to the persistence layer
+            pim.add_image(factory_base_image)
+            # Now replace the data and template with the files referenced above
+            # and mark it as a complete image
+            # Factory doesn't attempt to modify a disk image after it is COMPLETE so
+            # this will work safely on read-only NFS mounts
+            factory_base_image.data = diskimage_full
+            factory_base_image.template = open(tdl_full).read()
+            factory_base_image.status = 'COMPLETE'
+            # Now save it
+            pim.save_image(factory_base_image)
+
+            # We can now reference this object directly or via its UUID in persistent storage
+            return factory_base_image
+
+        #base_factory_image = _task_to_image(int(base_image))
+        base_factory_image = _nvr_to_image(base_image, opts['arch'])
+        utility_factory_image = _task_to_image(int(utility_image))
+
+        # OK - We have a template and two input images - lets build
+        fhandler = logging.FileHandler(ozlog)
+        bd = BuildDispatcher()
+        tlog = logging.getLogger()
+        tlog.setLevel(logging.DEBUG)
+        tlog.addHandler(fhandler)
+        result_loc = '/overcloud-control.tar'
+        params = {'utility_image': str(utility_factory_image.identifier),
+                  'results_location': result_loc,
+                  'utility_customizations': open(indirection_template).read() }
+        random.seed() # necessary to ensure a unique mac address
+        try:
+            target = bd.builder_for_target_image('indirection',
+                image_id=base_factory_image.identifier, 
+                parameters=params)
+            target.target_thread.join()
+        except:
+            self.log.debug("Exception encountered during target build")
+        finally:
+            # upload log even if we failed to help diagnose an issue
+            tlog.removeHandler(fhandler)
+            self.uploadFile(ozlog)
+        self.logger.debug('Target image results: %s' % target.target_image.status)
+
+        if target.target_image.status == 'FAILED':
+            # TODO abort when a task is CANCELLED
+            if not self.session.checkUpload('', os.path.basename(ozlog)):
+                tlog.removeHandler(fhandler)
+                self.uploadFile(ozlog)
+            raise koji.ApplianceError('Image status is %s: %s' %
+                (target.target_image.status, target.target_image.status_detail))
+
+        self.uploadFile(target.target_image.data, remoteName=os.path.basename(result_loc))
+
+        results = "Got past the upload - Holy cow"
+ 
         # TODO: Add mode of operation where full build details are given for
         #       either base or utility or both, then spawn subtasks to do them first
 
@@ -3002,7 +3204,7 @@ class BuildIndirectionImageTask(OzImageTask):
         # Collect artifacts on success and upload them back to the hub
 
         self.logger.debug("Doing an indirection build with all the required bits")
-        return "Indirection build went off without a hitch.  Nicely done!"
+        return results
 
 class BuildSRPMFromSCMTask(BaseBuildTask):
 
