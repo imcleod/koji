@@ -5004,6 +5004,8 @@ def handle_image_build_indirection(options, session, args):
          help=_("Architecture of the output image and input images"))
     parser.add_option("--target",
          help=_("Build target to use for the indirection build"))
+    parser.add_option("--skip-tag", action="store_true",
+         help=_("Do not tag the resulting build"))
     parser.add_option("--base-image-task",
          help=_("ID of the createImage task of the base image to be used"))
     parser.add_option("--base-image-build",
@@ -5016,6 +5018,8 @@ def handle_image_build_indirection(options, session, args):
         help=_("Name of the local file, or SCM file containing the template used to drive the indirection plugin"))
     parser.add_option("--indirection-template-url",
         help=_("SCM URL containing the template used to drive the indirection plugin"))
+    parser.add_option("--results-loc",
+        help=_("Relative path inside the working space image where the results should be extracted from"))
     parser.add_option("--scratch", action="store_true",
         help=_("Create a scratch image"))
     parser.add_option("--wait", action="store_true",
@@ -5042,9 +5046,9 @@ def _build_image_indirection(options, task_opts, session, args):
             bool(task_opts.base_image_build)):
         raise koji.GenericError, _("You must specify either a base-image task or build ID/NVR")
 
-    required_opts = [ 'name', 'version', 'release', 'arch', 'target', 'indirection_template' ]
+    required_opts = [ 'name', 'version', 'arch', 'target', 'indirection_template', 'results_loc' ]
     optional_opts = [ 'indirection_template_url', 'scratch', 'utility_image_task', 'utility_image_build',
-                      'base_image_task', 'base_image_build' ]  
+                      'base_image_task', 'base_image_build', 'release', 'skip_tag' ]  
 
     missing = [ ] 
     for opt in required_opts:
@@ -5070,6 +5074,22 @@ def _build_image_indirection(options, task_opts, session, args):
     else:
         callback = _progress_callback
 
+    # We do some early sanity checking of the given target.
+    # Kojid gets these values again later on, but we check now as a convenience
+    # for the user.
+
+    tmp_target = session.getBuildTarget(task_opts.target)
+    if not tmp_target:
+        raise koji.GenericError, _("Unknown build target: %s" % target)
+    dest_tag = session.getTag(tmp_target['dest_tag'])
+    if not dest_tag:
+        raise koji.GenericError, _("Unknown destination tag: %s" %
+                                   tmp_target['dest_tag_name'])
+
+    # Set the architecture
+    task_opts.arch = koji.canonArch(task_opts.arch)
+
+
     # Upload the indirection template file to the staging area.
     # If it's a URL, it's kojid's job to go get it when it does the checkout.
     if not task_opts.indirection_template_url:
@@ -5087,9 +5107,9 @@ def _build_image_indirection(options, task_opts, session, args):
     # Just pass everything in as opts.  No posiitonal arguments at all.  Why not?
     for opt in required_opts + optional_opts:
         val = getattr(task_opts, opt, None)
+        # We pass these through even if they are None
+        # The builder code can then check if they are set without using getattr
         hub_opts[opt] = val
-        #if val is not None:
-        #    hub_opts[opt] = val
 
     # finally, create the task.
     task_id = session.buildImageIndirection(opts=hub_opts,
