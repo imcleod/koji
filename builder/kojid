@@ -3051,7 +3051,7 @@ class BaseImageTask(OzImageTask):
         Some image formats require others to be processed first, which is why
         we have to do this. raw files in particular may not be kept.
         """
-        supported = ('raw', 'raw-xz', 'vmdk', 'qcow', 'qcow2', 'vdi', 'rhevm-ova', 'vsphere-ova', 'docker')
+        supported = ('raw', 'raw-xz', 'vmdk', 'qcow', 'qcow2', 'vdi', 'rhevm-ova', 'vsphere-ova', 'docker', 'vagrant-virtualbox', 'vagrant-libvirt')
         for f in formats:
             if f not in supported:
                 raise koji.ApplianceError('Invalid format: %s' % f)
@@ -3083,6 +3083,8 @@ class BaseImageTask(OzImageTask):
                   'qcow2': self._buildConvert,
                   'rhevm-ova':   self._buildOVA,
                   'vsphere-ova': self._buildOVA,
+                  'vagrant-virtualbox': self._buildOVA,
+                  'vagrant-libvirt':    self._buildOVA,
                   'docker':      self._buildDocker
         }
         # add a handler to the logger so that we capture ImageFactory's logging
@@ -3221,6 +3223,8 @@ class BaseImageTask(OzImageTask):
         img_opts = {}
         if self.opts.get('ova_option'):
             img_opts = dict([o.split('=') for o in self.opts.get('ova_option')])
+        # TODO-imcleod: If format is one of the vagrant formats then switch the target to the
+        # appropriate OVA value and inject the parameter required to trigger vagrant metadata
         targ = self._do_target_image(self.base_img.base_image.identifier,
             format.replace('-ova', ''))
         targ2 = self._do_target_image(targ.target_image.identifier, 'OVA',
@@ -3379,6 +3383,7 @@ class BaseImageTask(OzImageTask):
         # upload the results
         for format in (f for f in self.formats.keys() if self.formats[f]):
             newimg = images[format]['image']
+            # TODO-imcleod: for the vagrant formats, swap in appropriate ".box" names
             if 'ova' in format or format == 'raw-xz':
                 newname = self.imgname + '.' + format.replace('-', '.')
             elif format == 'docker':

@@ -720,6 +720,7 @@ insert into archivetypes (name, description, extensions) values ('ova', 'OVA ima
 insert into archivetypes (name, description, extensions) values ('ks', 'Kickstart', 'ks');
 insert into archivetypes (name, description, extensions) values ('cfg', 'Configuration file', 'cfg');
 insert into archivetypes (name, description, extensions) values ('vdi', 'VirtualBox Virtual Disk Image', 'vdi');
+insert into archivetypes (name, description, extensions) values ('box', 'Vagrant Box Image', 'box');
 
 -- Do we want to enforce a constraint that a build can only generate one
 -- archive with a given name?
