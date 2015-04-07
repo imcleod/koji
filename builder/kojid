@@ -3223,8 +3223,17 @@ class BaseImageTask(OzImageTask):
         img_opts = {}
         if self.opts.get('ova_option'):
             img_opts = dict([o.split('=') for o in self.opts.get('ova_option')])
-        # TODO-imcleod: If format is one of the vagrant formats then switch the target to the
-        # appropriate OVA value and inject the parameter required to trigger vagrant metadata
+        # As far as Image Factory is concerned, vagrant boxes are just another type of OVA
+        # We communicate the desire for vagrant-specific formatting by adding the *_ova_format
+        # options and turning the underlying format option back into one of the two target
+        # image types ('vsphere-ova' or 'rhevm-ova') that are used to generate the intermediate
+        # disk image
+        if format == 'vagrant-virtualbox':
+            format = 'vsphere-ova'
+            img_opts['vsphere_ova_format'] = 'vagrant-virtualbox'
+        if format == 'vagrant-libvirt':
+            format = 'rhevm-ova'
+            img_opts['rhevm_ova_format'] = 'vagrant-libvirt'
         targ = self._do_target_image(self.base_img.base_image.identifier,
             format.replace('-ova', ''))
         targ2 = self._do_target_image(targ.target_image.identifier, 'OVA',
@@ -3386,6 +3395,8 @@ class BaseImageTask(OzImageTask):
             # TODO-imcleod: for the vagrant formats, swap in appropriate ".box" names
             if 'ova' in format or format == 'raw-xz':
                 newname = self.imgname + '.' + format.replace('-', '.')
+            elif 'vagrant' in format:
+                newname = self.imgname + '.' + format + '.box'
             elif format == 'docker':
                 newname = self.imgname + '.' + 'tar.gz'
             else:
