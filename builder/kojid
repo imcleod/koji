@@ -3392,10 +3392,12 @@ class BaseImageTask(OzImageTask):
         # upload the results
         for format in (f for f in self.formats.keys() if self.formats[f]):
             newimg = images[format]['image']
-            # TODO-imcleod: for the vagrant formats, swap in appropriate ".box" names
             if 'ova' in format or format == 'raw-xz':
                 newname = self.imgname + '.' + format.replace('-', '.')
             elif 'vagrant' in format:
+                # This embeds the vagrant target and the ".box" format in the name
+                # Previously, based on filename, these looked like OVAs
+                # This was confusing to many people
                 newname = self.imgname + '.' + format + '.box'
             elif format == 'docker':
                 newname = self.imgname + '.' + 'tar.gz'
